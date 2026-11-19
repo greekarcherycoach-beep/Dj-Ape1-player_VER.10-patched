@@ -1,0 +1,111 @@
+name: Build (Windows)
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Build + installer
+    runs-on: windows-latest
+    permissions:
+      contents: write   # needed only for publishing a release on tags
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: List repository files
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -File -Force |
+            Where-Object { $_.FullName -notmatch '\\\.git\\' } |
+            ForEach-Object { $_.FullName.Substring((Get-Location).Path.Length + 1) } |
+            Select-Object -First 200
+
+      # The Cargo project may live in a sub-folder of the repo: find it.
+      - name: Locate project
+        shell: pwsh
+        run: |
+          $root = (Get-Location).Path
+          $toml = Get-ChildItem -Recurse -Filter Cargo.toml -File |
+                  Where-Object { $_.FullName -notmatch '\\(target|node_modules)\\' } |
+                  Where-Object { Select-String -Path $_.FullName -Pattern 'name\s*=\s*"dj-ape1"' -Quiet } |
+                  Select-Object -First 1
+          if (-not $toml) { throw "No Cargo.toml for dj-ape1 in the repository - see the file list in the previous step. Expected: Cargo.toml, src/main.rs, assets/index.html ..." }
+          $iss = Get-ChildItem -Recurse -Filter djape1.iss -File | Select-Object -First 1
+          if (-not $iss) { throw "djape1.iss not found in the repository" }
+          $app = $toml.DirectoryName
+          "APP_DIR=$app" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "ISS_FILE=$($iss.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Project: $app"
+          Write-Host "Installer script: $($iss.FullName)"
+          if (-not (Test-Path (Join-Path $app "Cargo.lock"))) { Write-Warning "Cargo.lock is missing next to Cargo.toml (--locked will fail)" }
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ env.APP_DIR }}
+
+      - name: Build (release)
+        working-directory: ${{ env.APP_DIR }}
+        run: cargo build --release --locked
+
+      - name: Resolve version
+        working-directory: ${{ env.APP_DIR }}
+        shell: pwsh
+        run: |
+          if ("${{ github.ref }}" -like "refs/tags/v*") {
+            $v = "${{ github.ref_name }}".TrimStart("v")
+          } else {
+            $m = Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+            $v = $m.Matches[0].Groups[1].Value + "-dev"
+          }
+          "APP_VERSION=$v" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Version: $v"
+
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found" }
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" $env:ISS_FILE
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+      - name: Collect outputs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          $setup = Get-ChildItem -Recurse -Filter "DjApe1-Setup-*.exe" -File |
+                   Where-Object { $_.FullName -notmatch '\\target\\' } | Select-Object -First 1
+          if (-not $setup) { throw "Installer was not produced" }
+          Copy-Item $setup.FullName out\
+          Copy-Item (Join-Path $env:APP_DIR "target\release\dj-ape1.exe") out\dj-ape1-windows-x64.exe
+          Get-ChildItem out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dj-ape1-windows
+          path: out/*
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true
