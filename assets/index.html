@@ -1836,9 +1836,9 @@ if(NATIVE){
  const dk=window.desktop;
  dk.onFullscreen(v=>{const b=$("appfs");if(b)b.textContent=v?"🗗":"⛶"});
  dk.onCmd(c=>{if(c==="toggle"){if(cur)au.paused?au.play().catch(()=>{}):au.pause()}else if(c==="next")next();else if(c==="prev")prev();else if(c==="stop")au.pause();else if(c==="mini")miniOpen()});
- let plName="";const rp=()=>{try{dk.state({playing:!au.paused,state:au.paused?(cur?"paused":"stopped"):"playing",title:cur&&cur.title||"",artist:cur&&cur.artist||"",album:cur&&cur.album||"",genre:cur&&cur.genre||"",playlist:plName,adj:adjStat()})}catch(e){}};
+ let plName="";const rp=()=>{try{dk.state({playing:!au.paused,state:au.paused?(cur?"paused":"stopped"):"playing",title:cur&&cur.title||"",artist:cur&&cur.artist||"",album:cur&&cur.album||"",genre:cur&&cur.genre||"",playlist:plName,adj:adjStat(),year:cur&&cur.year||"",coverId:cur?String(cur.id):"",cover:cur&&cur.cover||""})}catch(e){}};
  window.__ctl={run(o){try{const c=o&&o.cmd;if(c==="play"){if(cur)au.play().catch(()=>{})}else if(c==="pause"||c==="stop")au.pause();else if(c==="next")next();else if(c==="prev")prev();
- else if(c==="adj"){const a=o.a;if(a==="start")adjStart(o.profile||A.profile);else if(a==="stop")adjStop(true);else if(a==="fade")adjFade(+o.sec||4);else if(a==="emergency")adjEmergency()}
+ else if(c==="adj"){const a=o.a;if(a==="start")adjStart(o.profile||A.profile);else if(a==="stop")adjStop(true);else if(a==="fade")adjFade(+o.sec||4);else if(a==="emergency")adjEmergency();else if(a==="off")adjStop(false)}
  else if(c==="playlist"){const nm=String(o.name||"").trim().toLowerCase();if(A.profiles.some(x=>lw(x.name)===nm)){adjStart(o.name);return}
   const p=PL.find(x=>String(x.name).trim().toLowerCase()===nm);if(!p){plName="";rp();return}adjStop(false);const m=new Map(T.map(t=>[tk(t),t])),list=p.smart?T.filter(t=>inPL(t,p)):p.items.map(k=>m.get(k)).filter(Boolean);plName=p.name;startQ(list,null);rp()}}catch(e){console.error(e)}}};
 /* ===== Auto DJ core: pure selection logic (smart rotation) ===== */
