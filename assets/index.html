@@ -1836,8 +1836,91 @@ if(NATIVE){
  const dk=window.desktop;
  dk.onFullscreen(v=>{const b=$("appfs");if(b)b.textContent=v?"🗗":"⛶"});
  dk.onCmd(c=>{if(c==="toggle"){if(cur)au.paused?au.play().catch(()=>{}):au.pause()}else if(c==="next")next();else if(c==="prev")prev();else if(c==="stop")au.pause();else if(c==="mini")miniOpen()});
- let plName="";const rp=()=>{try{dk.state({playing:!au.paused,state:au.paused?(cur?"paused":"stopped"):"playing",title:cur&&cur.title||"",artist:cur&&cur.artist||"",album:cur&&cur.album||"",genre:cur&&cur.genre||"",playlist:plName})}catch(e){}};
- window.__ctl={run(o){try{const c=o&&o.cmd;if(c==="play"){if(cur)au.play().catch(()=>{})}else if(c==="pause"||c==="stop")au.pause();else if(c==="next")next();else if(c==="prev")prev();else if(c==="playlist"){const nm=String(o.name||"").trim().toLowerCase(),p=PL.find(x=>String(x.name).trim().toLowerCase()===nm);if(!p){plName="";rp();return}const m=new Map(T.map(t=>[tk(t),t])),list=p.smart?T.filter(t=>inPL(t,p)):p.items.map(k=>m.get(k)).filter(Boolean);plName=p.name;startQ(list,null);rp()}}catch(e){console.error(e)}}};["play","pause","ended","loadedmetadata"].forEach(ev=>au.addEventListener(ev,rp));
+ let plName="";const rp=()=>{try{dk.state({playing:!au.paused,state:au.paused?(cur?"paused":"stopped"):"playing",title:cur&&cur.title||"",artist:cur&&cur.artist||"",album:cur&&cur.album||"",genre:cur&&cur.genre||"",playlist:plName,adj:adjStat()})}catch(e){}};
+ window.__ctl={run(o){try{const c=o&&o.cmd;if(c==="play"){if(cur)au.play().catch(()=>{})}else if(c==="pause"||c==="stop")au.pause();else if(c==="next")next();else if(c==="prev")prev();
+ else if(c==="adj"){const a=o.a;if(a==="start")adjStart(o.profile||A.profile);else if(a==="stop")adjStop(true);else if(a==="fade")adjFade(+o.sec||4);else if(a==="emergency")adjEmergency()}
+ else if(c==="playlist"){const nm=String(o.name||"").trim().toLowerCase();if(A.profiles.some(x=>lw(x.name)===nm)){adjStart(o.name);return}
+  const p=PL.find(x=>String(x.name).trim().toLowerCase()===nm);if(!p){plName="";rp();return}adjStop(false);const m=new Map(T.map(t=>[tk(t),t])),list=p.smart?T.filter(t=>inPL(t,p)):p.items.map(k=>m.get(k)).filter(Boolean);plName=p.name;startQ(list,null);rp()}}catch(e){console.error(e)}}};
+/* ===== Auto DJ core: pure selection logic (smart rotation) ===== */
+const ADJC=(()=>{
+const MIN=60000,lo=s=>String(s||"").trim().toLowerCase();
+function parseCats(txt){return String(txt||"").split(",").map(s=>s.trim()).filter(Boolean).map(s=>{const m=s.match(/^(.*?)\s*:\s*(\d+)$/);return m?{n:m[1].trim(),song:+m[2]}:{n:s,song:null}})}
+function catOf(t,cats,inList){for(const c of cats){if((t.genres||[]).some(g=>lo(g)===lo(c.n))||(inList&&inList(t,c.n)))return c}return null}
+function pool(T,cats,inList){const out=[];for(const t of T){if(!t.file)continue;if(!cats.length){out.push({t,cat:null});continue}const c=catOf(t,cats,inList);if(c)out.push({t,cat:c})}return out}
+function blocked(e,hist,r,now,ov){
+ const t=e.t,songMin=(e.cat&&e.cat.song!=null?e.cat.song:r.song)*(ov.songF!=null?ov.songF:1);
+ const art=ov.artist!=null?ov.artist:r.artist,alb=ov.album!=null?ov.album:r.album,cm=ov.catMax!=null?ov.catMax:r.catMax,win=Math.max(songMin,art,alb);
+ for(let i=hist.length-1;i>=0;i--){const h=hist[i],age=(now-h.ts)/MIN;if(age>win)break;
+  if(h.id===t.id&&age<songMin)return"song";
+  if(art&&h.artist&&t.artist&&lo(h.artist)===lo(t.artist)&&age<art)return"artist";
+  if(alb&&h.album&&t.album&&lo(h.album)===lo(t.album)&&age<alb)return"album"}
+ if(cm&&e.cat){let run=0;for(let i=hist.length-1;i>=0&&hist[i].cat===e.cat.n;i--)run++;if(run>=cm)return"cat"}
+ return null}
+/* relaxation order when nothing qualifies: category run, album, half song cooldown, artist, quarter song cooldown, finally the least recently played */
+const LEVELS=[{},{catMax:0},{catMax:0,album:0},{catMax:0,album:0,songF:.5},{catMax:0,album:0,songF:.5,artist:0},{catMax:0,album:0,artist:0,songF:.25},{catMax:0,album:0,artist:0,songF:0}];
+/* o: {pool,hist,rules:{song,artist,album,catMax} in minutes,mode:'shuffle'|'seq',now,rnd,last(id),lastT,mix}
+   Rules are relaxed step by step when nothing qualifies, so the station never goes silent. */
+function pick(o){const P=o.pool,rnd=o.rnd||Math.random;if(!P.length)return null;
+ for(let lv=0;lv<LEVELS.length;lv++){
+  const ok=P.filter(e=>!blocked(e,o.hist,o.rules,o.now,LEVELS[lv]));if(!ok.length)continue;let e;
+  if(lv===LEVELS.length-1){const seen=new Map();for(const h of o.hist)seen.set(h.id,h.ts);e=ok.slice().sort((a,b)=>(seen.get(a.t.id)||0)-(seen.get(b.t.id)||0))[0]}
+  else if(o.mode==="seq"){const i=o.last==null?-1:P.findIndex(x=>x.t.id===o.last);for(let k=1;k<=P.length;k++){const c=P[(i+k+P.length)%P.length];if(ok.includes(c)){e=c;break}}}
+  else{const L=o.lastT;const w=ok.map(x=>{let v=1;if(o.mix&&L&&L.bpm&&x.t.bpm){const d=Math.abs(L.bpm-x.t.bpm);v=d<=6?3:d<=12?1.5:1}return v});let s=w.reduce((a,b)=>a+b,0)*rnd();e=ok[ok.length-1];for(let i=0;i<ok.length;i++){s-=w[i];if(s<=0){e=ok[i];break}}}
+  return{entry:e,level:lv}}
+ return null}
+return{parseCats,catOf,pool,pick,blocked}})();
+
+/* ===== Auto DJ (player side): profiles, smart rotation, controls, error skipping ===== */
+const lw=s=>String(s||"").trim().toLowerCase();
+const AD0={on:0,profile:"",profiles:[{name:"Mix",cats:"",mode:"shuffle",mix:0}],rules:{song:240,artist:60,album:120,catMax:3},ahead:2,emergency:"Emergency"};
+S.adj=Object.assign({},AD0,S.adj||{});S.adj.rules=Object.assign({},AD0.rules,S.adj.rules);if(!S.adj.profiles||!S.adj.profiles.length)S.adj.profiles=AD0.profiles;
+const A=S.adj;let adjHist=[],adjErr=0,adjErrTotal=0,fadeT=null;try{adjHist=JSON.parse(localStorage.getItem("adjhist")||"[]")}catch(e){}
+const adjSave=()=>{saveS();try{localStorage.setItem("adjhist",JSON.stringify(adjHist.slice(-400)))}catch(e){}};
+const inList=(t,n)=>{const p=PL.find(x=>lw(x.name)===lw(n));return !!p&&inPL(t,p)};
+const adjProfile=()=>A.profiles.find(p=>p.name===A.profile)||A.profiles[0];
+function adjPool(){const p=adjProfile(),cats=ADJC.parseCats(p.cats);return{p,cats,pool:ADJC.pool(T,cats,inList)}}
+function adjNextTrack(){const{p,cats,pool}=adjPool();if(!pool.length)return null;const now=Date.now();
+ const up=Q.slice(qi+1).map(t=>({id:t.id,artist:t.artist||"",album:t.album||"",cat:(ADJC.catOf(t,cats,inList)||{}).n,ts:now})),lastT=Q.length?Q[Q.length-1]:cur;
+ const r=ADJC.pick({pool,hist:adjHist.slice(-300).concat(up),rules:A.rules,mode:p.mode,now,last:lastT&&lastT.id,lastT,mix:p.mix});return r?r.entry.t:null}
+function adjFill(){if(!A.on)return;let n=0;while(Q.length-1-qi<A.ahead&&n++<8){const t=adjNextTrack();if(!t)break;Q.push(t)}try{renderQ()}catch(e){}rp()}
+const _cue=cue;cue=function(i){_cue(i);if(A.on&&cur){const cats=ADJC.parseCats(adjProfile().cats);adjHist.push({id:cur.id,title:cur.title||"",artist:cur.artist||"",album:cur.album||"",cat:(ADJC.catOf(cur,cats,inList)||{}).n,ts:Date.now()});adjSave();adjFill()}rp()};
+function adjStart(name){const p=A.profiles.find(x=>lw(x.name)===lw(name))||A.profiles[0];A.profile=p.name;A.on=1;rep=0;adjErr=0;plName=p.name;clearInterval(fadeT);au.volume=1;adjSave();
+ const{pool}=adjPool();if(!pool.length){A.on=0;plName="";toast("Auto DJ: δεν βρέθηκαν τραγούδια για τις κατηγορίες του προφίλ");rp();return false}
+ const r=ADJC.pick({pool,hist:adjHist.slice(-300),rules:A.rules,mode:p.mode,now:Date.now(),last:cur&&cur.id,lastT:cur,mix:p.mix});startQ([r.entry.t],r.entry.t);return true}
+function adjStop(pause){A.on=0;plName="";if(pause)au.pause();adjSave();rp()}
+function adjFade(sec){sec=sec||4;clearInterval(fadeT);const v0=au.volume||1,t0=Date.now();fadeT=setInterval(()=>{const k=1-(Date.now()-t0)/(sec*1000);if(k<=0){clearInterval(fadeT);au.pause();au.volume=1;rp()}else au.volume=v0*k},100)}
+function adjEmergency(){const p=PL.find(x=>lw(x.name)===lw(A.emergency));if(!p){toast("Auto DJ: δεν υπάρχει playlist έκτακτης ανάγκης «"+A.emergency+"»");return false}
+ const m=new Map(T.map(t=>[tk(t),t])),list=p.smart?T.filter(t=>inPL(t,p)):p.items.map(k=>m.get(k)).filter(Boolean);if(!list.length)return false;
+ A.on=0;plName="EMERGENCY";adjSave();clearInterval(fadeT);au.volume=1;startQ(list,list[0],0);rep=1;rp();return true}
+function adjStat(){const nx=A.on&&Q[qi+1];return{on:A.on?1:0,profile:A.profile,profiles:A.profiles.map(p=>p.name),next:nx?nx.title||"":"",nextArtist:nx?nx.artist||"":"",errors:adjErrTotal,dur:isFinite(au.duration)?au.duration:0,t0:Date.now()-(au.currentTime||0)*1000}}
+au.addEventListener("error",()=>{if(!A.on)return;adjErr++;adjErrTotal++;toast("Auto DJ: παράλειψη αρχείου που δεν παίζει");if(adjErr>5){A.on=0;toast("Auto DJ: πολλά διαδοχικά σφάλματα, σταμάτησε");rp();return}setTimeout(()=>{try{next()}catch(e){}},300)});
+au.addEventListener("playing",()=>{adjErr=0});
+{const t0=Date.now(),iv=setInterval(()=>{if(A.on&&T&&T.some(t=>t.file)){clearInterval(iv);if(!cur)adjStart(A.profile)}else if(Date.now()-t0>60000)clearInterval(iv)},2500)} /* resume after restart */
+/* ---- control panel ---- */
+function adjModal(){const m=$("modal");m.classList.remove("hide");const cnt={};T.forEach(t=>(t.genres||[]).forEach(g=>cnt[g]=(cnt[g]||0)+1));const top=Object.entries(cnt).sort((a,b)=>b[1]-a[1]).slice(0,14).map(x=>x[0]).join(", ");
+ const p=adjProfile(),R=A.rules,inp=(id,v,w)=>`<input id="${id}" value="${esc(v)}" style="width:${w||"100%"};padding:6px;box-sizing:border-box">`,bt=(id,l)=>`<button id="${id}" style="padding:8px 12px;margin:2px;cursor:pointer">${l}</button>`;
+ m.innerHTML=`<div class="mc" style="max-width:760px"><div class="mh"><b>🎛 Auto DJ</b><span class="x" style="cursor:pointer">✕</span></div><div style="padding:14px;line-height:1.6;max-height:78vh;overflow:auto">
+ <div id="adj_st" style="font-weight:700;margin-bottom:8px"></div><div>${bt("adj_start","▶ START AUTO DJ")}${bt("adj_stop","■ STOP")}${bt("adj_pause","⏸ PAUSE")}${bt("adj_prev","⏮")}${bt("adj_next","⏭ NEXT")}${bt("adj_fade","FADE OUT")}${bt("adj_emg","🚨 EMERGENCY PLAY")}</div>
+ <h4>Προφίλ</h4><select id="adj_p" style="padding:6px">${A.profiles.map(x=>`<option${x.name===p.name?" selected":""}>${esc(x.name)}</option>`).join("")}</select>${bt("adj_new","➕ Νέο")}${bt("adj_del","🗑 Διαγραφή")}
+ <p>Όνομα: ${inp("adj_n",p.name)}</p><p>Κατηγορίες (είδη ή ονόματα playlists, χωρισμένα με κόμμα· <code>Jazz, Lounge:480</code> = το Lounge δεν επαναλαμβάνει τραγούδι πριν από 480 λεπτά). Κενό = όλη η βιβλιοθήκη.<br>${inp("adj_c",p.cats)}<small>Διαθέσιμα είδη: ${esc(top)||"—"}</small></p>
+ <p>Σειρά: <select id="adj_m" style="padding:6px"><option value="shuffle"${p.mode==="shuffle"?" selected":""}>Τυχαία (Shuffle)</option><option value="seq"${p.mode==="seq"?" selected":""}>Με σειρά</option></select> <label><input type="checkbox" id="adj_x"${p.mix?" checked":""}> προτίμηση παρόμοιου BPM</label></p>
+ <h4>Κανόνες εναλλαγής (λεπτά)</h4><p>Ίδιο τραγούδι: ${inp("adj_r1",R.song,"70px")} Ίδιος καλλιτέχνης: ${inp("adj_r2",R.artist,"70px")} Ίδιο album: ${inp("adj_r3",R.album,"70px")} Ίδια κατηγορία έως: ${inp("adj_r4",R.catMax,"50px")} συνεχόμενα</p>
+ <p>Playlist έκτακτης ανάγκης: ${inp("adj_e",A.emergency,"220px")} Τραγούδια στην ουρά: ${inp("adj_a",A.ahead,"50px")}</p><p>${bt("adj_save","💾 Αποθήκευση")} <span id="adj_msg"></span></p>
+ <h4>Τελευταία τραγούδια</h4><div id="adj_h" style="font-size:13px"></div></div></div>`;
+ const num=(id,d)=>{const v=parseInt($(id).value);return isNaN(v)||v<0?d:v},show=()=>{$("adj_st").textContent=(A.on?"● AUTO DJ ON — προφίλ «"+A.profile+"»":"○ AUTO DJ OFF")+(cur?" · "+(cur.artist||"")+" – "+(cur.title||""):"");
+  $("adj_h").innerHTML=adjHist.slice(-8).reverse().map(h=>`${new Date(h.ts).toLocaleTimeString("el-GR")} · ${esc(h.artist)} – ${esc(h.title||"")}${h.cat?" · "+esc(h.cat):""}`).join("<br>")||"—"};show();
+ const save=()=>{const old=adjProfile(),np={name:$("adj_n").value.trim()||old.name,cats:$("adj_c").value.trim(),mode:$("adj_m").value,mix:$("adj_x").checked?1:0},i=A.profiles.indexOf(old);if(A.profiles.some((x,j)=>j!==i&&lw(x.name)===lw(np.name))){$("adj_msg").textContent="Υπάρχει ήδη προφίλ με αυτό το όνομα";return false}
+  if(A.profile===old.name)A.profile=np.name;A.profiles[i]=np;A.rules={song:num("adj_r1",240),artist:num("adj_r2",60),album:num("adj_r3",120),catMax:num("adj_r4",3)};A.emergency=$("adj_e").value.trim()||"Emergency";A.ahead=Math.max(1,Math.min(6,num("adj_a",2)));adjSave();$("adj_msg").textContent="✓ Αποθηκεύτηκε";return true};
+ m.onclick=e=>{const id=e.target.id;if(e.target===m||e.target.className==="x"){m.classList.add("hide");return}
+  if(id==="adj_p"){return}if(id==="adj_save")save();
+  else if(id==="adj_start"){if(save())adjStart($("adj_n").value.trim()||A.profile)}else if(id==="adj_stop")adjStop(true);else if(id==="adj_pause")au.pause();else if(id==="adj_prev")prev();else if(id==="adj_next")next();else if(id==="adj_fade")adjFade(4);else if(id==="adj_emg")adjEmergency();
+  else if(id==="adj_new"){let n="Προφίλ "+(A.profiles.length+1);A.profiles.push({name:n,cats:"",mode:"shuffle",mix:0});A.profile=n;adjSave();adjModal();return}
+  else if(id==="adj_del"){if(A.profiles.length>1&&confirm("Διαγραφή του προφίλ «"+A.profile+"»;")){A.profiles=A.profiles.filter(x=>x.name!==A.profile);A.profile=A.profiles[0].name;adjSave();adjModal();return}}
+  setTimeout(show,300)};
+ m.onchange=e=>{if(e.target.id==="adj_p"){A.profile=e.target.value;adjSave();adjModal()}}}
+document.addEventListener("click",e=>{if(e.target&&e.target.id==="adj_open")adjModal()});
+
+["play","pause","ended","loadedmetadata"].forEach(ev=>au.addEventListener(ev,rp));
  dk.onOpen(p=>openPaths(p,true));dk.getOpen().then(p=>{if(p&&p.length)openPaths(p,true)}).catch(()=>{});
  dk.native.onChanged(()=>{checkNew(false,true)});
  {const _rl=refreshLinks;refreshLinks=function(){_rl.apply(this,arguments);try{dk.native.watch(DIRS.filter(d=>d.handle&&d.handle.path).map(d=>d.handle.path))}catch(e){}}}
@@ -1899,7 +1982,7 @@ function sugModal(){const m=$("modal"),base=cur||[...sel][0]||T.find(t=>t.cam||t
   <p class="mu"><span>Μετά από:</span> <b>${esc(base.title||base.fname)}</b>${base.artist?" — "+esc(base.artist):""} ${chips({t:base,why:[]})}</p>`+
   (list.length?list.map((x,i)=>`<div class="mr"><span class="sgs" style="background:hsl(${Math.round(x.score*1.2)} 60% 38%)">${x.score}%</span><span class="ell"><b>${esc(x.t.title||x.t.fname)}</b> <span class="mu">${esc(x.t.artist||"")}</span><br><small class="mu">${chips(x)}</small></span><button class="sm" data-s="${i}" data-a="play">▶</button><button class="sm" data-s="${i}" data-a="next">⏭</button><button class="sm" data-s="${i}" data-a="add">➕</button></div>`).join(""):'<p class="mu">Δεν βρέθηκαν προτάσεις.</p>')+
   (miss?`<p class="mu" style="font-size:12px">${miss} τραγούδια δεν έχουν key ή BPM — οι προτάσεις είναι πιο ακριβείς μετά την ανάλυση. <button class="sm" id="s_an">🎼 Ανάλυση</button></p>`:"")+
-  `<label class="row" style="cursor:pointer"><input type="checkbox" id="sg_fx"${AMX?" checked":""}> <span>Εφαρμογή μεταβάσεων στην ουρά που παίζει</span></label>${fxHTML("sg")}<label class="row" style="cursor:pointer"><input type="checkbox" id="s_dj"${S.autodj?" checked":""}> <span>Αυτόματη συνέχεια (Auto DJ): όταν τελειώσει η ουρά, παίζει την καλύτερη πρόταση</span></label></div>`;
+  `<label class="row" style="cursor:pointer"><input type="checkbox" id="sg_fx"${AMX?" checked":""}> <span>Εφαρμογή μεταβάσεων στην ουρά που παίζει</span></label>${fxHTML("sg")}<label class="row" style="cursor:pointer"><input type="checkbox" id="s_dj"${S.autodj?" checked":""}> <span>Αυτόματη συνέχεια (Auto DJ): όταν τελειώσει η ουρά, παίζει την καλύτερη πρόταση</span></label></div><div style="margin-top:8px"><button id="adj_open" style="padding:8px 14px;cursor:pointer">🎛 Άνοιγμα πίνακα Auto DJ (προφίλ, κανόνες, ιστορικό)</button></div>`;
  m.onclick=e=>{if(e.target===m||e.target.className==="x"){m.classList.add("hide");return}
   if(e.target.id==="s_an"){m.classList.add("hide");analyzeKeys(T.filter(t=>t.file&&(!t.cam||!t.bpm)));return}
   const b=e.target.closest("[data-s]");if(!b)return;const t=list[+b.dataset.s].t,a=b.dataset.a;

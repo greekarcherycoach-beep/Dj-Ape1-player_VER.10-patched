@@ -328,6 +328,15 @@ fn ctl(st: &AppState, mut rq: Request, path: &str, method: &Method) {
             st.ctl_eval(json!({ "cmd": &path[5..] }));
             reply(rq, 200, "application/json", b"{}".to_vec())
         }
+        "/api/cmd" => {
+            // generic command for the UI (Auto DJ etc.): a small JSON object with a short "cmd" string
+            if body.len() < 4096 && arg.is_object() && arg["cmd"].as_str().map_or(false, |c| !c.is_empty() && c.len() < 40) {
+                st.ctl_eval(arg);
+                reply(rq, 200, "application/json", b"{}".to_vec())
+            } else {
+                text(rq, 400, "bad command")
+            }
+        }
         "/api/playlist" => match arg["name"].as_str() {
             Some(n) if !n.is_empty() && n.len() < 200 => {
                 st.ctl_eval(json!({ "cmd": "playlist", "name": n }));
