@@ -277,7 +277,7 @@ body.compact .trow{min-height:34px}body.compact .tc{padding:3px 10px}body.compac
     <div class="pop" id="m_view"><div class="row"><div class="seg"><button id="vl" class="on" title="Πίνακας">☰ Πίνακας</button><button id="vg" title="Κάρτες">▦ Κάρτες</button></div></div>
      <div class="row"><span class="mu">Ταξινόμηση</span><select id="sort"></select><button class="sm" id="sdir" data-keep title="Αύξουσα / Φθίνουσα">↑</button></div><hr>
      <button id="vizbtn">🎆 Visualizer…</button><button id="colbtn">⚙ Παραμετροποίηση οθόνης…</button><button id="hidemenus">🙈 Απόκρυψη μενού</button></div></div>
-   <div class="pm"><button class="sm pmb" data-pm="m_more" title="Περισσότερα">⋯</button>
+   <button class="sm" data-adj title="Auto DJ: προφίλ, κανόνες, έλεγχος">🎛 Auto DJ</button><div class="pm"><button class="sm pmb" data-pm="m_more" title="Περισσότερα">⋯</button>
     <div class="pop r" id="m_more"><button id="selmode">☑ Επιλογή τραγουδιών</button><button id="keyall">🎼 Ανίχνευση key & BPM</button><hr>
      <button id="stbtn">📊 Στατιστικά</button><button id="prbtn">🖨 Εκτύπωση</button><button id="manage">⚙ Διαχείριση βιβλιοθήκης</button><hr>
      <button id="save">💾 Αποθήκευση βιβλιοθήκης</button><label class="mi"><input type="checkbox" id="autosave"> Αυτόματη αποθήκευση</label><button class="openlib">📂 Άνοιγμα αποθηκευμένης</button><button id="expbtn">⬇ Εξαγωγή playlist…</button><button id="csv">⬇ Εξαγωγή CSV</button><button id="again" class="danger">🗑 Νέα βιβλιοθήκη</button><hr>
@@ -1836,9 +1836,9 @@ if(NATIVE){
  const dk=window.desktop;
  dk.onFullscreen(v=>{const b=$("appfs");if(b)b.textContent=v?"🗗":"⛶"});
  dk.onCmd(c=>{if(c==="toggle"){if(cur)au.paused?au.play().catch(()=>{}):au.pause()}else if(c==="next")next();else if(c==="prev")prev();else if(c==="stop")au.pause();else if(c==="mini")miniOpen()});
- let plName="";const rp=()=>{try{dk.state({playing:!au.paused,state:au.paused?(cur?"paused":"stopped"):"playing",title:cur&&cur.title||"",artist:cur&&cur.artist||"",album:cur&&cur.album||"",genre:cur&&cur.genre||"",playlist:plName,adj:adjStat(),year:cur&&cur.year||"",coverId:cur?String(cur.id):"",cover:cur&&cur.cover||""})}catch(e){}};
+ let plName="";const rp=()=>{try{dk.state({playing:!au.paused,state:au.paused?(cur?"paused":"stopped"):"playing",title:cur&&cur.title||"",artist:cur&&cur.artist||"",album:cur&&cur.album||"",genre:(cur&&cur.genres||[]).join(";"),playlist:plName,adj:adjStat(),year:cur&&cur.year||"",coverId:cur?String(cur.id):"",cover:cur&&cur.cover||""})}catch(e){}};
  window.__ctl={run(o){try{const c=o&&o.cmd;if(c==="play"){if(cur)au.play().catch(()=>{})}else if(c==="pause"||c==="stop")au.pause();else if(c==="next")next();else if(c==="prev")prev();
- else if(c==="adj"){const a=o.a;if(a==="start")adjStart(o.profile||A.profile);else if(a==="stop")adjStop(true);else if(a==="fade")adjFade(+o.sec||4);else if(a==="emergency")adjEmergency();else if(a==="off")adjStop(false)}
+ else if(c==="adj"){const a=o.a;if(a==="start")adjStart(o.profile||A.profile);else if(a==="stop")adjStop(true);else if(a==="fade")adjFade(+o.sec||4);else if(a==="emergency")adjEmergency();else if(a==="off")adjStop(false);else if(a==="config")adjConfig(o)}
  else if(c==="playlist"){const nm=String(o.name||"").trim().toLowerCase();if(A.profiles.some(x=>lw(x.name)===nm)){adjStart(o.name);return}
   const p=PL.find(x=>String(x.name).trim().toLowerCase()===nm);if(!p){plName="";rp();return}adjStop(false);const m=new Map(T.map(t=>[tk(t),t])),list=p.smart?T.filter(t=>inPL(t,p)):p.items.map(k=>m.get(k)).filter(Boolean);plName=p.name;startQ(list,null);rp()}}catch(e){console.error(e)}}};
 /* ===== Auto DJ core: pure selection logic (smart rotation) ===== */
@@ -1892,7 +1892,12 @@ function adjFade(sec){sec=sec||4;clearInterval(fadeT);const v0=au.volume||1,t0=D
 function adjEmergency(){const p=PL.find(x=>lw(x.name)===lw(A.emergency));if(!p){toast("Auto DJ: δεν υπάρχει playlist έκτακτης ανάγκης «"+A.emergency+"»");return false}
  const m=new Map(T.map(t=>[tk(t),t])),list=p.smart?T.filter(t=>inPL(t,p)):p.items.map(k=>m.get(k)).filter(Boolean);if(!list.length)return false;
  A.on=0;plName="EMERGENCY";adjSave();clearInterval(fadeT);au.volume=1;startQ(list,list[0],0);rep=1;rp();return true}
-function adjStat(){const nx=A.on&&Q[qi+1];return{on:A.on?1:0,profile:A.profile,profiles:A.profiles.map(p=>p.name),next:nx?nx.title||"":"",nextArtist:nx?nx.artist||"":"",errors:adjErrTotal,dur:isFinite(au.duration)?au.duration:0,t0:Date.now()-(au.currentTime||0)*1000}}
+let _av={k:"",v:null};function adjAvail(){const k=T.length+":"+PL.length;if(_av.k!==k){const c={};T.forEach(t=>(t.genres||[]).forEach(g=>c[g]=(c[g]||0)+1));_av={k,v:{genres:Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,40).map(x=>x[0]),playlists:PL.map(p=>p.name).slice(0,60)}}}return _av.v}
+function adjConfig(o){const ss=(v,n)=>String(v==null?"":v).slice(0,n),ni=(v,d,mx)=>{v=parseInt(v);return isNaN(v)||v<0?d:Math.min(v,mx)};
+ if(Array.isArray(o.profiles)&&o.profiles.length){const seen=new Set(),ps=[];for(const p of o.profiles.slice(0,30)){const n=ss(p.name,60).trim();if(!n||seen.has(n.toLowerCase()))continue;seen.add(n.toLowerCase());ps.push({name:n,cats:ss(p.cats,300).trim(),mode:p.mode==="seq"?"seq":"shuffle",mix:p.mix?1:0})}if(ps.length){A.profiles=ps;if(!ps.some(p=>p.name===A.profile))A.profile=ps[0].name}}
+ if(o.rules){const r=o.rules;A.rules={song:ni(r.song,240,10080),artist:ni(r.artist,60,10080),album:ni(r.album,120,10080),catMax:ni(r.catMax,3,20)}}
+ if(o.ahead!=null)A.ahead=Math.max(1,Math.min(6,ni(o.ahead,2,6)));if(o.emergency!=null)A.emergency=ss(o.emergency,100).trim()||"Emergency";adjSave();rp()}
+function adjStat(){const nx=A.on&&Q[qi+1];return{cfg:{profiles:A.profiles,rules:A.rules,ahead:A.ahead,emergency:A.emergency},avail:adjAvail(),on:A.on?1:0,profile:A.profile,profiles:A.profiles.map(p=>p.name),next:nx?nx.title||"":"",nextArtist:nx?nx.artist||"":"",errors:adjErrTotal,dur:isFinite(au.duration)?au.duration:0,t0:Date.now()-(au.currentTime||0)*1000}}
 au.addEventListener("error",()=>{if(!A.on)return;adjErr++;adjErrTotal++;toast("Auto DJ: παράλειψη αρχείου που δεν παίζει");if(adjErr>5){A.on=0;toast("Auto DJ: πολλά διαδοχικά σφάλματα, σταμάτησε");rp();return}setTimeout(()=>{try{next()}catch(e){}},300)});
 au.addEventListener("playing",()=>{adjErr=0});
 {const t0=Date.now(),iv=setInterval(()=>{if(A.on&&T&&T.some(t=>t.file)){clearInterval(iv);if(!cur)adjStart(A.profile)}else if(Date.now()-t0>60000)clearInterval(iv)},2500)} /* resume after restart */
@@ -1918,7 +1923,7 @@ function adjModal(){const m=$("modal");m.classList.remove("hide");const cnt={};T
   else if(id==="adj_del"){if(A.profiles.length>1&&confirm("Διαγραφή του προφίλ «"+A.profile+"»;")){A.profiles=A.profiles.filter(x=>x.name!==A.profile);A.profile=A.profiles[0].name;adjSave();adjModal();return}}
   setTimeout(show,300)};
  m.onchange=e=>{if(e.target.id==="adj_p"){A.profile=e.target.value;adjSave();adjModal()}}}
-document.addEventListener("click",e=>{if(e.target&&e.target.id==="adj_open")adjModal()});
+document.addEventListener("click",e=>{if(e.target&&e.target.closest&&e.target.closest("#adj_open,[data-adj]"))adjModal()});
 
 ["play","pause","ended","loadedmetadata"].forEach(ev=>au.addEventListener(ev,rp));
  dk.onOpen(p=>openPaths(p,true));dk.getOpen().then(p=>{if(p&&p.length)openPaths(p,true)}).catch(()=>{});
