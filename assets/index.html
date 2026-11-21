@@ -1836,9 +1836,9 @@ if(NATIVE){
  const dk=window.desktop;
  dk.onFullscreen(v=>{const b=$("appfs");if(b)b.textContent=v?"🗗":"⛶"});
  dk.onCmd(c=>{if(c==="toggle"){if(cur)au.paused?au.play().catch(()=>{}):au.pause()}else if(c==="next")next();else if(c==="prev")prev();else if(c==="stop")au.pause();else if(c==="mini")miniOpen()});
- let plName="";const rp=()=>{try{dk.state({playing:!au.paused,state:au.paused?(cur?"paused":"stopped"):"playing",title:cur&&cur.title||"",artist:cur&&cur.artist||"",album:cur&&cur.album||"",genre:(cur&&cur.genres||[]).join(";"),playlist:plName,adj:adjStat(),year:cur&&cur.year||"",coverId:cur?String(cur.id):"",cover:cur&&cur.cover||""})}catch(e){}};
+ let plName="";const rp=()=>{try{dk.state({playing:!au.paused,state:au.paused?(cur?"paused":"stopped"):"playing",title:cur&&cur.title||"",artist:cur&&cur.artist||"",album:cur&&cur.album||"",genre:(cur&&cur.genres||[]).join(";"),playlist:plName,adj:adjStat(),year:cur&&cur.year||"",coverId:cur?String(cur.id):"",cover:cur&&cur.cover||""})}catch(e){}try{adjUI()}catch(e){}};
  window.__ctl={run(o){try{const c=o&&o.cmd;if(c==="play"){if(cur)au.play().catch(()=>{})}else if(c==="pause"||c==="stop")au.pause();else if(c==="next")next();else if(c==="prev")prev();
- else if(c==="adj"){const a=o.a;if(a==="start")adjStart(o.profile||A.profile);else if(a==="stop")adjStop(true);else if(a==="fade")adjFade(+o.sec||4);else if(a==="emergency")adjEmergency();else if(a==="off")adjStop(false);else if(a==="config")adjConfig(o)}
+ else if(c==="adj"){const a=o.a;if(a==="start")adjStart(o.profile||A.profile);else if(a==="stop")adjStop(true);else if(a==="fade")adjFade(+o.sec||4);else if(a==="emergency")adjEmergency();else if(a==="off")adjStop(false);else if(a==="config")adjConfig(o);else if(a==="mode")adjSetMode(o.mode,true);else if(a==="style")adjStyle(o.cats)}
  else if(c==="playlist"){const nm=String(o.name||"").trim().toLowerCase();if(A.profiles.some(x=>lw(x.name)===nm)){adjStart(o.name);return}
   const p=PL.find(x=>String(x.name).trim().toLowerCase()===nm);if(!p){plName="";rp();return}adjStop(false);const m=new Map(T.map(t=>[tk(t),t])),list=p.smart?T.filter(t=>inPL(t,p)):p.items.map(k=>m.get(k)).filter(Boolean);plName=p.name;startQ(list,null);rp()}}catch(e){console.error(e)}}};
 /* ===== Auto DJ core: pure selection logic (smart rotation) ===== */
@@ -1872,35 +1872,40 @@ return{parseCats,catOf,pool,pick,blocked}})();
 
 /* ===== Auto DJ (player side): profiles, smart rotation, controls, error skipping ===== */
 const lw=s=>String(s||"").trim().toLowerCase();
-const AD0={on:0,profile:"",profiles:[{name:"Mix",cats:"",mode:"shuffle",mix:0}],rules:{song:240,artist:60,album:120,catMax:3},ahead:2,emergency:"Emergency"};
+const AD0={on:0,mode:"autodj",ctx:null,profile:"",profiles:[{name:"Mix",cats:"",mode:"shuffle",mix:0}],rules:{song:240,artist:60,album:120,catMax:3},ahead:2,emergency:"Emergency"};
 S.adj=Object.assign({},AD0,S.adj||{});S.adj.rules=Object.assign({},AD0.rules,S.adj.rules);if(!S.adj.profiles||!S.adj.profiles.length)S.adj.profiles=AD0.profiles;
-const A=S.adj;let adjHist=[],adjErr=0,adjErrTotal=0,fadeT=null;try{adjHist=JSON.parse(localStorage.getItem("adjhist")||"[]")}catch(e){}
+if(!["autodj","player","live"].includes(S.adj.mode))S.adj.mode="autodj";
+const A=S.adj;let adjHist=[],adjErr=0,adjErrTotal=0,fadeT=null,srcSeq=0,curAuto=false,adjLastCur=null,playHist=[];const adjAuto=new WeakSet();try{adjHist=JSON.parse(localStorage.getItem("adjhist")||"[]")}catch(e){}
 const adjSave=()=>{saveS();try{localStorage.setItem("adjhist",JSON.stringify(adjHist.slice(-400)))}catch(e){}};
 const inList=(t,n)=>{const p=PL.find(x=>lw(x.name)===lw(n));return !!p&&inPL(t,p)};
 const adjProfile=()=>A.profiles.find(p=>p.name===A.profile)||A.profiles[0];
-function adjPool(){const p=adjProfile(),cats=ADJC.parseCats(p.cats);return{p,cats,pool:ADJC.pool(T,cats,inList)}}
+const adjCats=()=>A.ctx&&A.ctx.cats!=null?A.ctx.cats:adjProfile().cats,adjStyleLabel=()=>(A.ctx?A.ctx.cats:adjProfile().cats)||"Όλη η βιβλιοθήκη";
+function adjPool(){const p=adjProfile(),cats=ADJC.parseCats(adjCats());return{p,cats,pool:ADJC.pool(T,cats,inList)}}
 function adjNextTrack(){const{p,cats,pool}=adjPool();if(!pool.length)return null;const now=Date.now();
  const up=Q.slice(qi+1).map(t=>({id:t.id,artist:t.artist||"",album:t.album||"",cat:(ADJC.catOf(t,cats,inList)||{}).n,ts:now})),lastT=Q.length?Q[Q.length-1]:cur;
  const r=ADJC.pick({pool,hist:adjHist.slice(-300).concat(up),rules:A.rules,mode:p.mode,now,last:lastT&&lastT.id,lastT,mix:p.mix});return r?r.entry.t:null}
-function adjFill(){if(!A.on)return;let n=0;while(Q.length-1-qi<A.ahead&&n++<8){const t=adjNextTrack();if(!t)break;Q.push(t)}try{renderQ()}catch(e){}rp()}
-const _cue=cue;cue=function(i){_cue(i);if(A.on&&cur){const cats=ADJC.parseCats(adjProfile().cats);adjHist.push({id:cur.id,title:cur.title||"",artist:cur.artist||"",album:cur.album||"",cat:(ADJC.catOf(cur,cats,inList)||{}).n,ts:Date.now()});adjSave();adjFill()}rp()};
-function adjStart(name){const p=A.profiles.find(x=>lw(x.name)===lw(name))||A.profiles[0];A.profile=p.name;A.on=1;rep=0;adjErr=0;plName=p.name;clearInterval(fadeT);au.volume=1;adjSave();
+function adjFill(){if(!A.on)return;let n=0;while(Q.length-1-qi<A.ahead&&n++<8){const t=adjNextTrack();if(!t)break;adjAuto.add(t);Q.push(t)}try{renderQ()}catch(e){}rp()}
+const _cue=cue;cue=function(i){_cue(i);if(cur){if(cur!==adjLastCur){curAuto=adjAuto.has(cur);adjLastCur=cur}adjAuto.delete(cur);playHist.push({title:cur.title||"",artist:cur.artist||"",ts:Date.now()});if(playHist.length>30)playHist.shift();
+ if(A.on){const cats=ADJC.parseCats(adjCats());adjHist.push({id:cur.id,title:cur.title||"",artist:cur.artist||"",album:cur.album||"",cat:(ADJC.catOf(cur,cats,inList)||{}).n,ts:Date.now()});adjSave();adjFill()}}rp()};
+function adjStart(name){const p=A.profiles.find(x=>lw(x.name)===lw(name))||A.profiles[0];if(A.profile!==p.name)A.ctx=null;A.profile=p.name;A.mode="autodj";A.on=1;rep=0;adjErr=0;plName=p.name;clearInterval(fadeT);au.volume=1;
+ const manual=Q.slice(qi+1).filter(x=>!adjAuto.has(x));adjPurge();adjSave();
  const{pool}=adjPool();if(!pool.length){A.on=0;plName="";toast("Auto DJ: δεν βρέθηκαν τραγούδια για τις κατηγορίες του προφίλ");rp();return false}
- const r=ADJC.pick({pool,hist:adjHist.slice(-300),rules:A.rules,mode:p.mode,now:Date.now(),last:cur&&cur.id,lastT:cur,mix:p.mix});startQ([r.entry.t],r.entry.t);return true}
-function adjStop(pause){A.on=0;plName="";if(pause)au.pause();adjSave();rp()}
+ const r=ADJC.pick({pool,hist:adjHist.slice(-300),rules:A.rules,mode:p.mode,now:Date.now(),last:cur&&cur.id,lastT:cur,mix:p.mix});adjAuto.add(r.entry.t);startQ([r.entry.t],r.entry.t);
+ if(manual.length){Q.splice(qi+1,0,...manual);try{renderQ()}catch(e){}}return true}
+function adjStop(pause){A.on=0;plName="";adjPurge();if(pause)au.pause();adjSave();rp()}
 function adjFade(sec){sec=sec||4;clearInterval(fadeT);const v0=au.volume||1,t0=Date.now();fadeT=setInterval(()=>{const k=1-(Date.now()-t0)/(sec*1000);if(k<=0){clearInterval(fadeT);au.pause();au.volume=1;rp()}else au.volume=v0*k},100)}
 function adjEmergency(){const p=PL.find(x=>lw(x.name)===lw(A.emergency));if(!p){toast("Auto DJ: δεν υπάρχει playlist έκτακτης ανάγκης «"+A.emergency+"»");return false}
  const m=new Map(T.map(t=>[tk(t),t])),list=p.smart?T.filter(t=>inPL(t,p)):p.items.map(k=>m.get(k)).filter(Boolean);if(!list.length)return false;
- A.on=0;plName="EMERGENCY";adjSave();clearInterval(fadeT);au.volume=1;startQ(list,list[0],0);rep=1;rp();return true}
+ A.on=0;A.mode="player";srcSeq++;plName="EMERGENCY";adjPurge();adjSave();clearInterval(fadeT);au.volume=1;startQ(list,list[0],0);rep=1;rp();return true}
 let _av={k:"",v:null};function adjAvail(){const k=T.length+":"+PL.length;if(_av.k!==k){const c={};T.forEach(t=>(t.genres||[]).forEach(g=>c[g]=(c[g]||0)+1));_av={k,v:{genres:Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,40).map(x=>x[0]),playlists:PL.map(p=>p.name).slice(0,60)}}}return _av.v}
 function adjConfig(o){const ss=(v,n)=>String(v==null?"":v).slice(0,n),ni=(v,d,mx)=>{v=parseInt(v);return isNaN(v)||v<0?d:Math.min(v,mx)};
  if(Array.isArray(o.profiles)&&o.profiles.length){const seen=new Set(),ps=[];for(const p of o.profiles.slice(0,30)){const n=ss(p.name,60).trim();if(!n||seen.has(n.toLowerCase()))continue;seen.add(n.toLowerCase());ps.push({name:n,cats:ss(p.cats,300).trim(),mode:p.mode==="seq"?"seq":"shuffle",mix:p.mix?1:0})}if(ps.length){A.profiles=ps;if(!ps.some(p=>p.name===A.profile))A.profile=ps[0].name}}
  if(o.rules){const r=o.rules;A.rules={song:ni(r.song,240,10080),artist:ni(r.artist,60,10080),album:ni(r.album,120,10080),catMax:ni(r.catMax,3,20)}}
  if(o.ahead!=null)A.ahead=Math.max(1,Math.min(6,ni(o.ahead,2,6)));if(o.emergency!=null)A.emergency=ss(o.emergency,100).trim()||"Emergency";adjSave();rp()}
-function adjStat(){const nx=A.on&&Q[qi+1];return{cfg:{profiles:A.profiles,rules:A.rules,ahead:A.ahead,emergency:A.emergency},avail:adjAvail(),on:A.on?1:0,profile:A.profile,profiles:A.profiles.map(p=>p.name),next:nx?nx.title||"":"",nextArtist:nx?nx.artist||"":"",errors:adjErrTotal,dur:isFinite(au.duration)?au.duration:0,t0:Date.now()-(au.currentTime||0)*1000}}
+function adjStat(){const nx=A.on&&Q[qi+1];return{mode:A.mode,srcSeq,adapted:!!A.ctx,style:adjStyleLabel(),cfg:{profiles:A.profiles,rules:A.rules,ahead:A.ahead,emergency:A.emergency},avail:adjAvail(),on:A.on?1:0,profile:A.profile,profiles:A.profiles.map(p=>p.name),next:nx?nx.title||"":"",nextArtist:nx?nx.artist||"":"",errors:adjErrTotal,dur:isFinite(au.duration)?au.duration:0,t0:Date.now()-(au.currentTime||0)*1000}}
 au.addEventListener("error",()=>{if(!A.on)return;adjErr++;adjErrTotal++;toast("Auto DJ: παράλειψη αρχείου που δεν παίζει");if(adjErr>5){A.on=0;toast("Auto DJ: πολλά διαδοχικά σφάλματα, σταμάτησε");rp();return}setTimeout(()=>{try{next()}catch(e){}},300)});
 au.addEventListener("playing",()=>{adjErr=0});
-{const t0=Date.now(),iv=setInterval(()=>{if(A.on&&T&&T.some(t=>t.file)){clearInterval(iv);if(!cur)adjStart(A.profile)}else if(Date.now()-t0>60000)clearInterval(iv)},2500)} /* resume after restart */
+{const t0=Date.now(),iv=setInterval(()=>{if(A.on&&A.mode==="autodj"&&T&&T.some(t=>t.file)){clearInterval(iv);if(!cur)adjStart(A.profile)}else if(Date.now()-t0>60000)clearInterval(iv)},2500)} /* resume after restart */
 /* ---- control panel ---- */
 function adjModal(){const m=$("modal");m.classList.remove("hide");const cnt={};T.forEach(t=>(t.genres||[]).forEach(g=>cnt[g]=(cnt[g]||0)+1));const top=Object.entries(cnt).sort((a,b)=>b[1]-a[1]).slice(0,14).map(x=>x[0]).join(", ");
  const p=adjProfile(),R=A.rules,inp=(id,v,w)=>`<input id="${id}" value="${esc(v)}" style="width:${w||"100%"};padding:6px;box-sizing:border-box">`,bt=(id,l)=>`<button id="${id}" style="padding:8px 12px;margin:2px;cursor:pointer">${l}</button>`;
@@ -1924,6 +1929,51 @@ function adjModal(){const m=$("modal");m.classList.remove("hide");const cnt={};T
   setTimeout(show,300)};
  m.onchange=e=>{if(e.target.id==="adj_p"){A.profile=e.target.value;adjSave();adjModal()}}}
 document.addEventListener("click",e=>{if(e.target&&e.target.closest&&e.target.closest("#adj_open,[data-adj]"))adjModal()});
+/* ---- one source at a time: modes are mutually exclusive; manual queue changes survive; adaptive style ---- */
+function adjPurge(){let n=0;for(let i=Q.length-1;i>qi;i--){if(adjAuto.has(Q[i])){adjAuto.delete(Q[i]);Q.splice(i,1);n++}}try{renderQ()}catch(e){}return n}
+function adjSetMode(m,remote){if(!["autodj","player","live"].includes(m))return;const prev=A.mode;if(prev===m&&(m!=="autodj"||A.on)){if(!remote)srcSeq++;rp();return}
+ A.mode=m;clearInterval(fadeT);
+ if(m==="live"){A.on=0;plName="";adjPurge();if(cur&&!au.paused)adjFade(1.5)}                 /* LIVE: automatic source stops, the player stays silent */
+ else if(m==="player"){A.on=0;plName="";adjPurge();if(curAuto&&cur&&!au.paused)adjFade(1.5)} /* PLAYER: Auto DJ stops (its queued songs are removed), manual content stays */
+ else adjStart(A.profile);                                                                  /* AUTO DJ: previous source stops, Auto DJ starts */
+ if(!remote)srcSeq++;adjSave();rp()}
+function adjStyle(cats){const c=String(cats==null?"":cats).trim().slice(0,300);A.ctx=c?{cats:c,at:Date.now()}:null;adjPurge();if(A.on)adjFill();adjSave();rp()} /* Auto DJ stays on; rules, history and limits stay */
+function qMove(from,to){if(from<0||from>=Q.length||to<0||to>=Q.length||from===to)return;const[t]=Q.splice(from,1);Q.splice(to,0,t);adjAuto.delete(t);if(from===qi)qi=to;else if(from<qi&&to>=qi)qi--;else if(from>qi&&to<=qi)qi++;try{renderQ()}catch(e){}rp()}
+au.addEventListener("play",()=>{if(A.mode==="live"){au.pause();toast("Λειτουργία LIVE: ο player είναι σιωπηλός. Άλλαξε σε AUTO DJ ή PLAYER για να παίξεις.")}});
+{const _bq=bindQ;bindQ=function(root){_bq(root);let drag=-1;root.querySelectorAll("[data-q]").forEach(r=>{const i=+r.dataset.q;r.draggable=true;if(adjAuto.has(Q[i]))r.insertAdjacentHTML("beforeend",'<span class="qauto">AUTO</span>');
+ r.ondragstart=e=>{drag=i;try{e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain",String(i))}catch(x){}};r.ondragover=e=>{e.preventDefault();r.classList.add("qover")};r.ondragleave=()=>r.classList.remove("qover");
+ r.ondrop=e=>{e.preventDefault();r.classList.remove("qover");if(drag>=0&&drag!==i)qMove(drag,i);drag=-1}})}}
+/* ---- ON AIR panel in the main screen ---- */
+{const st=document.createElement("style");st.textContent=`.adj-on{background:var(--ac)!important;color:var(--onac,#fff)!important;font-weight:700}
+#onair{margin:10px 14px;padding:12px 14px;border:1px solid var(--bd);border-radius:14px;background:var(--card);font-size:13px}#onair .oa-h{display:flex;gap:8px;align-items:center;flex-wrap:wrap}#onair .oa-h b{letter-spacing:.06em}
+#onair .oa-b{border-radius:6px;padding:1px 8px;font-size:11px;font-weight:800;background:var(--ac);color:var(--onac,#fff)}#onair .oa-b.live{background:#d62839;color:#fff}#onair .oa-b.ad{background:var(--ac2);color:var(--ac)}
+#onair .oa-m{display:flex;gap:6px;margin:10px 0}#onair .oa-m button{flex:1;padding:8px;border-radius:10px;border:1px solid var(--bd);background:transparent;color:var(--tx);font-weight:700;cursor:pointer}#onair .oa-m button.on{background:var(--ac);border-color:var(--ac);color:var(--onac,#fff)}
+#onair .oa-g{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px}#onair .oa-c{border:1px solid var(--bd);border-radius:10px;padding:6px 10px}#onair .oa-c span{display:block;font-size:10px;letter-spacing:.06em;color:var(--mu)}#onair .oa-c b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#onair .oa-r{display:flex;gap:6px;align-items:center;padding:3px 0}#onair .oa-r span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#onair details{margin-top:8px}#onair summary{cursor:pointer;color:var(--mu)}#onair input,#onair select{padding:6px;margin-top:6px;max-width:100%}
+.qauto{margin-left:6px;font-size:10px;font-weight:800;color:var(--ac);border:1px solid var(--ac);border-radius:5px;padding:0 4px}.qover{outline:2px dashed var(--ac)}`;document.head.appendChild(st);
+ const oa=document.createElement("div");oa.id="onair";oa.innerHTML=`<div class="oa-h"><b>ON AIR – RADIO PLAYER</b><span class="oa-b live hide" id="oa-live">LIVE ON AIR</span><span class="oa-b hide" id="oa-adj">AUTO DJ ACTIVE</span><span class="oa-b ad hide" id="oa-adp">ADAPTED</span></div>
+ <div class="oa-m"><button data-oam="autodj">🤖 AUTO DJ</button><button data-oam="player">🎵 PLAYER</button><button data-oam="live">🎙 LIVE</button></div>
+ <div class="oa-g"><div class="oa-c"><span>PLAYER NOW PLAYING</span><b id="oa-pn">—</b></div><div class="oa-c"><span>STATION ON AIR</span><b id="oa-so">—</b></div><div class="oa-c"><span>ACTIVE SOURCE</span><b id="oa-src">—</b></div><div class="oa-c"><span>PLAYBACK STATUS</span><b id="oa-ps">—</b></div><div class="oa-c"><span>MUSIC STYLE</span><b id="oa-sty">—</b></div></div>
+ <details><summary>Στυλ, επόμενα και προηγούμενα κομμάτια</summary><select id="oa-sty-sel"></select><div style="margin-top:8px"><b>Προηγούμενα 5 κομμάτια</b><div id="oa-prev"></div></div><div style="margin-top:8px"><b>Προσθήκη στα επόμενα</b><br><input id="oa-q" placeholder="Αναζήτηση τίτλου / καλλιτέχνη (ο Auto DJ συνεχίζει μετά)"><div id="oa-qr"></div></div></details>`;
+ const c=document.getElementById("content");c.parentNode.insertBefore(oa,c);
+ oa.querySelectorAll("[data-oam]").forEach(b=>b.onclick=()=>adjSetMode(b.dataset.oam,false));
+ document.getElementById("oa-sty-sel").onchange=e=>adjStyle(e.target.value);
+ const oq=document.getElementById("oa-q"),orr=document.getElementById("oa-qr");
+ oq.oninput=()=>{const s=lw(oq.value);if(s.length<2){orr.innerHTML="";return}const L=T.filter(t=>t.file&&lw((t.title||"")+" "+(t.artist||"")).includes(s)).slice(0,8);orr.innerHTML=L.map(t=>`<div class="oa-r"><span>${esc((t.artist?t.artist+" – ":"")+(t.title||""))}</span><button data-a="now" data-id="${esc(String(t.id))}" title="Παίξε τώρα">▶</button><button data-a="next" data-id="${esc(String(t.id))}" title="Επόμενο">⏭</button><button data-a="end" data-id="${esc(String(t.id))}" title="Στο τέλος">＋</button></div>`).join("")||'<div class="mu">Κανένα αποτέλεσμα</div>'};
+ orr.onclick=e=>{const b=e.target.closest&&e.target.closest("button[data-id]");if(!b)return;const t=T.find(x=>String(x.id)===b.dataset.id);if(!t)return;adjAuto.delete(t);
+  if(!Q.length)startQ([t],t);else if(b.dataset.a==="now"){Q.splice(qi+1,0,t);cue(qi+1)}else if(b.dataset.a==="next")Q.splice(qi+1,0,t);else Q.push(t);try{renderQ()}catch(x){}rp();toast("✓ "+(t.title||""))}}
+function adjUI(){const g=s=>document.getElementById(s),mode=A.mode,on=!!(A.on&&mode==="autodj"),nm=cur?((cur.artist?cur.artist+" – ":"")+(cur.title||"")):"";
+ document.querySelectorAll("[data-adj]").forEach(b=>{b.classList.toggle("adj-on",on);b.textContent=on?"🎛 Auto DJ ● ON":"🎛 Auto DJ"});
+ g("oa-live").classList.toggle("hide",mode!=="live");g("oa-adj").classList.toggle("hide",!on);g("oa-adp").classList.toggle("hide",!(on&&A.ctx));
+ document.querySelectorAll("#onair [data-oam]").forEach(b=>b.classList.toggle("on",b.dataset.oam===mode));
+ g("oa-pn").textContent=cur?nm+(au.paused?"  (παύση)":""):"—";
+ g("oa-so").textContent=mode==="live"?"LIVE – ζωντανή είσοδος":(cur&&!au.paused?nm:"— (σιωπή)");
+ g("oa-src").textContent={autodj:"AUTO DJ",player:"PLAYER",live:"LIVE"}[mode]+(mode==="autodj"&&!A.on?" (σταματημένος)":"");
+ g("oa-ps").textContent=!cur?"Stopped":au.paused?"Paused":"Playing";g("oa-sty").textContent=adjStyleLabel()+(A.ctx?" · ADAPTED":"");
+ const ph=playHist.slice(0,-1).slice(-5).reverse();g("oa-prev").innerHTML=ph.length?ph.map(h=>`<div>${new Date(h.ts).toLocaleTimeString("el-GR",{hour:"2-digit",minute:"2-digit"})} · ${esc((h.artist?h.artist+" – ":"")+h.title)}</div>`).join(""):"—";
+ const sel=g("oa-sty-sel"),av=adjAvail(),key=av.genres.join("|");if(sel.dataset.k!==key){sel.dataset.k=key;sel.innerHTML='<option value="">Στυλ: όπως το πρόγραμμα</option>'+av.genres.map(x=>`<option>${esc(x)}</option>`).join("")}sel.value=A.ctx?A.ctx.cats:""}
+/* ===== end Auto DJ ===== */
+
 
 ["play","pause","ended","loadedmetadata"].forEach(ev=>au.addEventListener(ev,rp));
  dk.onOpen(p=>openPaths(p,true));dk.getOpen().then(p=>{if(p&&p.length)openPaths(p,true)}).catch(()=>{});
